@@ -202,7 +202,7 @@ def load_image(inf, spacing=None, medium_index=None, illum_wavelen=None, illum_p
         name = os.path.splitext(os.path.split(inf)[-1])[0]
 
     def read_im(img):
-        arr = from_image(img).astype('d')
+        arr = fromimage(img).astype('d')
         # pick out only one channel of a color image
         if channel is None:
             if len(arr.shape) > 2:
@@ -224,14 +224,14 @@ def load_image(inf, spacing=None, medium_index=None, illum_wavelen=None, illum_p
             warn("Warning: Loading a tiff stack as a timeseries. This functionality is experimental. Some HoloPy features may behave in unexpected ways.")
             datalist=[]
             while True:
-                datalist += [read_im(pi).expand_dims('time').assign_attrs(normals=None)]
+                datalist += [read_im(pi).expand_dims('time').assign_attrs(illum_polarization=None,normals=None)]
                 datalist[-1]['time']=[(len(datalist)-1)*frame_interval]
                 try:
                     pi.seek(pi.tell()+1)
                 except EOFError:
                     #finished all frames in stack
                     break
-            return update_metadata(xr.concat(datalist, dim='time'), normals=normals)
+            return update_metadata(xr.concat(datalist, dim='time'), illum_polarization=illum_polarization, normals=normals)
 
 def save(outf, obj):
     """
