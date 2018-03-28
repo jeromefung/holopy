@@ -33,7 +33,7 @@ import importlib
 from . import serialize
 from ..metadata import data_grid, get_spacing, update_metadata
 from ..utils import is_none, ensure_array, dict_without
-from ..errors import NoMetadata, BadImage
+from ..errors import NoMetadata, BadImage, LoadError
 
 attr_coords = '_attr_coords'
 tiflist = ['.tif', '.TIF', '.tiff', '.TIFF']
@@ -164,7 +164,7 @@ def load(inf, lazy=False):
     else:
         raise NoMetadata
 
-def load_image(inf, spacing=None, medium_index=None, illum_wavelen=None, illum_polarization=None, normals=None, channel=None, name=None):
+def load_image(inf, spacing=None, medium_index=None, illum_wavelen=None, illum_polarization=None, normals=None, channel=None, frame_interval=None, name=None):
     """
     Load data or results
 
@@ -174,34 +174,64 @@ def load_image(inf, spacing=None, medium_index=None, illum_wavelen=None, illum_p
         File to load.  If the file is a yaml file, all other arguments are
         ignored.  If inf is a list of image files or filenames they are all
         loaded as a a timeseries hologram
+    spacing : flt or (flt, flt)
+        pixel size of images in each dimension - assumes square pixels if single value
+    medium_index : flt (optional)
+        refractive index of the medium
+    illum_wavelen : flt (optional)
+        wavelength (in vacuum) of illuminating light
+    illum_polarization : (flt, flt) (optional)
+        (x, y) polarization vector of the illuminating light
+    normals : (flt, flt, flt) (optional)
+        (x, y, z) vector of the component of light propagation captured by detector
     channel : int (optional)
         number of channel to load for a color image (in general 0=red,
         1=green, 2=blue)
+    frame_interval : flt (optional)
+        interval between frames if loading a multi-page tiff
+    name : str (optional)
+        name to assign the xr.DataArray object resulting from load_image
 
     Returns
     -------
-    obj : The object loaded, :class:`holopy.core.marray.Image`, or as loaded from yaml
+    xr.DataArray : image grid with associated metadata
 
     """
-    with pilimage.open(inf) as pi:
-        arr=fromimage(pi).astype('d')
-
-    # pick out only one channel of a color image
-    if channel is None:
-        if len(arr.shape) > 2:
-            raise BadImage('Not a greyscale image. You must specify a channel to use')
-    elif len(arr.shape) > 2:
-        if channel >= arr.shape[2]:
-            raise LoadError(filename,
-                "The image doesn't have a channel number {0}".format(channel))
-        else:
-            arr = arr[:, :, channel]
-    else:
-        warn("Warning: not a color image (channel number ignored)")
 
     if name is None:
         name = os.path.splitext(os.path.split(inf)[-1])[0]
-    return data_grid(arr, spacing, medium_index, illum_wavelen, illum_polarization, normals, name)
+
+    def read_im(img):
+        arr = from_image(img).astype('d')
+        # pick out only one channel of a color image
+        if channel is None:
+            if len(arr.shape) > 2:
+                raise BadImage('Not a greyscale image. You must specify a channel to use.')
+        elif len(arr.shape) > 2:
+            if channel >= arr.shape[2]:
+                raise LoadError(inf,
+                    "The image doesn't have a channel number {0}".format(channel))
+            else:
+                arr = arr[:, :, channel]
+        else:
+            warn("Warning: not a color image (channel number ignored)")
+        return data_grid(arr, spacing, medium_index, illum_wavelen, illum_polarization, normals, name)
+
+    with pilimage.open(inf) as pi:
+        if frame_interval is None:
+            return read_im(pi)
+        else:
+            warn("Warning: Loading a tiff stack as a timeseries. This functionality is experimental. Some HoloPy features may behave in unexpected ways.")
+            datalist=[]
+            while True:
+                datalist += [read_im(pi).expand_dims('time').assign_attrs(normals=None)]
+                datalist[-1]['time']=[(len(datalist)-1)*frame_interval]
+                try:
+                    pi.seek(pi.tell()+1)
+                except EOFError:
+                    #finished all frames in stack
+                    break
+            return update_metadata(xr.concat(datalist, dim='time'), normals=normals)
 
 def save(outf, obj):
     """
